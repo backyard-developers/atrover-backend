@@ -50,7 +50,7 @@ cd atrover-backend
 npm install --save
 
 # Start Redis (if not running)
-redis-server &
+redis-server --dir ./redis --daemonize yes
 
 # Run in development mode
 npm run dev
@@ -60,7 +60,7 @@ npm run dev
 
 ```bash
 direnv allow
-redis-server &
+redis-server --dir ./redis --daemonize yes
 npm run dev
 ```
 

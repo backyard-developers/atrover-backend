@@ -1,0 +1,1020 @@
+asyncapi: 3.0.0
+info:
+  title: ATRover Control Server API
+  version: 1.0.0
+  description: |
+    WebSocket API for real-time Android rover control with video/audio streaming.
+
+    ## Architecture Overview
+    - **Command Server** (default port 8080): Handles rover registration, commands, and telemetry
+    - **Media Server** (default port 8081): Handles video/audio streaming
+    - **Redis**: State persistence and cross-instance pub/sub for horizontal scaling
+
+    ## HTTP Health Endpoints
+    Both servers expose a health check endpoint:
+    - `GET http://localhost:{COMMAND_PORT}/health` → `{ "status": "ok", "server": "command", "instanceId": "..." }`
+    - `GET http://localhost:{MEDIA_PORT}/health` → `{ "status": "ok", "server": "media", "instanceId": "..." }`
+
+    All other HTTP requests return 404.
+
+    ## Connection Flow
+    1. Rover connects to Command Server WebSocket at `/ws`
+    2. Rover sends `register` message with its name
+    3. Server responds with `registered` message containing assigned UUID
+    4. Rover maintains connection with periodic `heartbeat` messages
+    5. Rover connects to Media Server WebSocket at `/ws`
+    6. Rover sends `register` message with the assigned rover ID
+    7. Dashboard clients connect to Media Server and send `start_stream` to subscribe
+
+    ## Multi-Instance Support
+    Multiple backend instances can run simultaneously. Redis is used for:
+    - **State persistence**: Rover metadata stored with 5-minute TTL
+    - **Cross-instance command routing**: Commands for rovers on other instances are forwarded via `rover:commands` pub/sub channel
+    - **Event broadcasting**: Connection/disconnection events published on `rover:events` channel
+
+    ## Environment Variables
+    | Variable | Default | Description |
+    |----------|---------|-------------|
+    | `COMMAND_PORT` | `8080` | Command server port |
+    | `MEDIA_PORT` | `8081` | Media server port |
+    | `REDIS_URL` | `redis://localhost:6379` | Redis connection URL |
+    | `INSTANCE_ID` | `instance-{PID}` | Unique instance identifier |
+
+  license:
+    name: MIT
+
+servers:
+  commandServer:
+    host: localhost:8080
+    pathname: /ws
+    protocol: ws
+    description: |
+      Command and control WebSocket server. Handles rover registration,
+      heartbeat keep-alive, and control command routing.
+
+  mediaServer:
+    host: localhost:8081
+    pathname: /ws
+    protocol: ws
+    description: |
+      Media streaming WebSocket server. Handles media socket registration,
+      stream subscription management, and binary frame forwarding.
+      Supports both text (JSON control) and binary (media frames) messages.
+
+channels:
+  commandChannel:
+    address: /ws
+    description: |
+      Command server WebSocket channel for rover control.
+      All messages are JSON-encoded text frames.
+    servers:
+      - $ref: '#/servers/commandServer'
+    messages:
+      register:
+        $ref: '#/components/messages/RegisterRover'
+      registered:
+        $ref: '#/components/messages/RoverRegistered'
+      heartbeat:
+        $ref: '#/components/messages/Heartbeat'
+      heartbeatAck:
+        $ref: '#/components/messages/HeartbeatAck'
+      command:
+        $ref: '#/components/messages/Command'
+      commandAck:
+        $ref: '#/components/messages/CommandAck'
+      error:
+        $ref: '#/components/messages/Error'
+
+  mediaChannel:
+    address: /ws
+    description: |
+      Media server WebSocket channel for streaming.
+      Supports both text frames (JSON control messages) and binary frames (media data).
+      Binary frames use a 1-byte header to indicate media type.
+    servers:
+      - $ref: '#/servers/mediaServer'
+    messages:
+      mediaRegister:
+        $ref: '#/components/messages/MediaRegister'
+      mediaRegistered:
+        $ref: '#/components/messages/MediaRegistered'
+      startStream:
+        $ref: '#/components/messages/StartStream'
+      streamStarted:
+        $ref: '#/components/messages/StreamStarted'
+      stopStream:
+        $ref: '#/components/messages/StopStream'
+      streamStopped:
+        $ref: '#/components/messages/StreamStopped'
+      mediaFrame:
+        $ref: '#/components/messages/MediaFrame'
+      error:
+        $ref: '#/components/messages/Error'
+
+  roverEventsChannel:
+    address: rover:events
+    description: |
+      Internal Redis pub/sub channel for broadcasting rover lifecycle events
+      across backend instances. Not directly accessible by WebSocket clients.
+    messages:
+      roverConnected:
+        $ref: '#/components/messages/RoverConnectedEvent'
+      roverDisconnected:
+        $ref: '#/components/messages/RoverDisconnectedEvent'
+
+  roverCommandsChannel:
+    address: rover:commands
+    description: |
+      Internal Redis pub/sub channel for routing commands to rovers connected
+      on other backend instances. Used when the target rover is not on the
+      local instance.
+    messages:
+      crossInstanceCommand:
+        $ref: '#/components/messages/CrossInstanceCommand'
+
+operations:
+  # ── Command Server: Client → Server ──────────────────────────────
+  roverRegister:
+    action: receive
+    channel:
+      $ref: '#/channels/commandChannel'
+    summary: Register a new rover
+    description: |
+      Rover sends registration request with its name. The server creates a new
+      rover entry, persists it to Redis, sets a 5-minute TTL, and publishes a
+      `rover:connected` event on the `rover:events` pub/sub channel.
+    messages:
+      - $ref: '#/channels/commandChannel/messages/register'
+
+  sendHeartbeat:
+    action: receive
+    channel:
+      $ref: '#/channels/commandChannel'
+    summary: Rover heartbeat
+    description: |
+      Rover sends periodic heartbeat to maintain connection. The server updates
+      the `lastHeartbeat` timestamp and refreshes the Redis TTL. If no heartbeat
+      is received within 5 minutes, the rover state expires from Redis.
+    messages:
+      - $ref: '#/channels/commandChannel/messages/heartbeat'
+
+  sendCommand:
+    action: receive
+    channel:
+      $ref: '#/channels/commandChannel'
+    summary: Send command to rover
+    description: |
+      Dashboard sends a control command targeting a specific rover. The server
+      first attempts to deliver the command to the local rover's WebSocket. If
+      the rover is not on this instance, the command is published to the
+      `rover:commands` Redis channel for cross-instance routing.
+    messages:
+      - $ref: '#/channels/commandChannel/messages/command'
+
+  # ── Command Server: Server → Client ──────────────────────────────
+  roverRegistered:
+    action: send
+    channel:
+      $ref: '#/channels/commandChannel'
+    summary: Confirm rover registration
+    description: Server responds with a UUID assigned to the registered rover.
+    messages:
+      - $ref: '#/channels/commandChannel/messages/registered'
+
+  heartbeatAck:
+    action: send
+    channel:
+      $ref: '#/channels/commandChannel'
+    summary: Heartbeat acknowledgment
+    description: Server confirms receipt of heartbeat.
+    messages:
+      - $ref: '#/channels/commandChannel/messages/heartbeatAck'
+
+  commandAck:
+    action: send
+    channel:
+      $ref: '#/channels/commandChannel'
+    summary: Command acknowledgment
+    description: Server confirms the command was received and routed.
+    messages:
+      - $ref: '#/channels/commandChannel/messages/commandAck'
+
+  sendCommandError:
+    action: send
+    channel:
+      $ref: '#/channels/commandChannel'
+    summary: Command server error
+    description: |
+      Sent when the server encounters an error processing a message
+      (invalid JSON, unknown message type, etc.).
+    messages:
+      - $ref: '#/channels/commandChannel/messages/error'
+
+  # ── Media Server: Client → Server ────────────────────────────────
+  mediaRegister:
+    action: receive
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Register media socket
+    description: |
+      Rover registers its media socket after command registration. The rover
+      must already be registered on this instance via the command server.
+      If the rover ID is not found locally, an error is returned.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/mediaRegister'
+
+  subscribeToStream:
+    action: receive
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Subscribe to media stream
+    description: |
+      Dashboard client requests to receive video, audio, or both from a
+      specific rover. The client is added to an in-memory subscriber set
+      for that rover. Multiple clients can subscribe to the same rover.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/startStream'
+
+  unsubscribeFromStream:
+    action: receive
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Unsubscribe from media stream
+    description: |
+      Client stops receiving media from a rover. The subscriber is removed
+      from the set. When the last subscriber disconnects, the set is cleaned up.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/stopStream'
+
+  sendMediaFrame:
+    action: receive
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Rover sends media frame
+    description: |
+      Binary WebSocket message from the rover containing video or audio data.
+      The first byte indicates the media type (0x01 = video, 0x02 = audio),
+      followed by the raw frame data. Minimum frame size is 2 bytes.
+      The frame is forwarded to all subscribers of this rover.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/mediaFrame'
+
+  # ── Media Server: Server → Client ────────────────────────────────
+  mediaRegistered:
+    action: send
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Confirm media registration
+    description: Server confirms the media socket was linked to the rover.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/mediaRegistered'
+
+  streamStarted:
+    action: send
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Stream subscription confirmed
+    description: Server confirms the client is now receiving the requested media type.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/streamStarted'
+
+  streamStopped:
+    action: send
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Stream unsubscription confirmed
+    description: Server confirms the client is no longer receiving media from the rover.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/streamStopped'
+
+  receiveMediaFrame:
+    action: send
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Client receives media frame
+    description: |
+      Forwarded binary media data from a subscribed rover. Same binary format
+      as the incoming frame: 1-byte type header followed by frame data.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/mediaFrame'
+
+  sendMediaError:
+    action: send
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Media server error
+    description: |
+      Sent when the media server encounters an error (invalid JSON, unknown
+      message type, rover not found, etc.).
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/error'
+
+  # ── Internal Redis Pub/Sub ───────────────────────────────────────
+  publishRoverConnected:
+    action: send
+    channel:
+      $ref: '#/channels/roverEventsChannel'
+    summary: Broadcast rover connected event
+    description: Published when a rover successfully registers on any instance.
+    messages:
+      - $ref: '#/channels/roverEventsChannel/messages/roverConnected'
+
+  publishRoverDisconnected:
+    action: send
+    channel:
+      $ref: '#/channels/roverEventsChannel'
+    summary: Broadcast rover disconnected event
+    description: Published when a rover's WebSocket connection closes.
+    messages:
+      - $ref: '#/channels/roverEventsChannel/messages/roverDisconnected'
+
+  publishCrossInstanceCommand:
+    action: send
+    channel:
+      $ref: '#/channels/roverCommandsChannel'
+    summary: Route command to another instance
+    description: |
+      Published when a command targets a rover that is not connected to the
+      local instance. Other instances subscribe to this channel and deliver
+      the command if they own the target rover.
+    messages:
+      - $ref: '#/channels/roverCommandsChannel/messages/crossInstanceCommand'
+
+components:
+  messages:
+    # ── Command Server Messages ──────────────────────────────────────
+    RegisterRover:
+      name: register
+      title: Register Rover
+      summary: Register a new rover with the command server
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RegisterPayload'
+      examples:
+        - name: RegisterExample
+          payload:
+            type: register
+            name: Rover-01
+
+    RoverRegistered:
+      name: registered
+      title: Rover Registered
+      summary: Confirmation that rover has been registered
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RegisteredPayload'
+      examples:
+        - name: RegisteredExample
+          payload:
+            type: registered
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+
+    Heartbeat:
+      name: heartbeat
+      title: Heartbeat
+      summary: Keep-alive message from rover
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/HeartbeatPayload'
+      examples:
+        - name: HeartbeatExample
+          payload:
+            type: heartbeat
+
+    HeartbeatAck:
+      name: heartbeat_ack
+      title: Heartbeat Acknowledgment
+      summary: Server acknowledgment of heartbeat
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/HeartbeatAckPayload'
+      examples:
+        - name: HeartbeatAckExample
+          payload:
+            type: heartbeat_ack
+
+    Command:
+      name: command
+      title: Rover Command
+      summary: Control command sent to a rover
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CommandPayload'
+      examples:
+        - name: MoveForwardExample
+          summary: Move rover forward at 50% speed
+          payload:
+            type: command
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+            command:
+              type: command
+              action: move
+              direction: forward
+              speed: 50
+        - name: StopExample
+          summary: Stop the rover
+          payload:
+            type: command
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+            command:
+              type: command
+              action: stop
+        - name: RotateExample
+          summary: Rotate rover 90 degrees clockwise
+          payload:
+            type: command
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+            command:
+              type: command
+              action: rotate
+              degrees: 90
+        - name: CalibrateExample
+          summary: Calibrate the rover
+          payload:
+            type: command
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+            command:
+              type: command
+              action: calibrate
+
+    CommandAck:
+      name: command_ack
+      title: Command Acknowledgment
+      summary: Server acknowledgment that a command was received and routed
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CommandAckPayload'
+      examples:
+        - name: CommandAckExample
+          payload:
+            type: command_ack
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+
+    # ── Media Server Messages ────────────────────────────────────────
+    MediaRegister:
+      name: register
+      title: Media Register
+      summary: Register media socket for a rover
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MediaRegisterPayload'
+      examples:
+        - name: MediaRegisterExample
+          payload:
+            type: register
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+
+    MediaRegistered:
+      name: registered
+      title: Media Registered
+      summary: Confirmation of media socket registration
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MediaRegisteredPayload'
+      examples:
+        - name: MediaRegisteredExample
+          payload:
+            type: registered
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+
+    StartStream:
+      name: start_stream
+      title: Start Stream
+      summary: Request to start receiving media from a rover
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StartStreamPayload'
+      examples:
+        - name: StartVideoStream
+          summary: Subscribe to video stream
+          payload:
+            type: start_stream
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+            mediaType: video
+        - name: StartBothStreams
+          summary: Subscribe to both video and audio
+          payload:
+            type: start_stream
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+            mediaType: both
+
+    StreamStarted:
+      name: stream_started
+      title: Stream Started
+      summary: Confirmation that stream subscription is active
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StreamStartedPayload'
+      examples:
+        - name: StreamStartedExample
+          payload:
+            type: stream_started
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+            mediaType: video
+
+    StopStream:
+      name: stop_stream
+      title: Stop Stream
+      summary: Request to stop receiving media from a rover
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StopStreamPayload'
+      examples:
+        - name: StopStreamExample
+          payload:
+            type: stop_stream
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+
+    StreamStopped:
+      name: stream_stopped
+      title: Stream Stopped
+      summary: Confirmation that stream subscription is cancelled
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StreamStoppedPayload'
+      examples:
+        - name: StreamStoppedExample
+          payload:
+            type: stream_stopped
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+
+    MediaFrame:
+      name: mediaFrame
+      title: Media Frame
+      summary: Binary video or audio frame
+      contentType: application/octet-stream
+      payload:
+        $ref: '#/components/schemas/MediaFramePayload'
+
+    Error:
+      name: error
+      title: Error
+      summary: Error response from server
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ErrorPayload'
+      examples:
+        - name: InvalidJsonError
+          payload:
+            type: error
+            message: Invalid JSON
+        - name: RoverNotFoundError
+          payload:
+            type: error
+            message: "Rover not found. Register via command server first."
+        - name: UnknownTypeError
+          payload:
+            type: error
+            message: Unknown message type
+
+    # ── Internal Redis Pub/Sub Messages ──────────────────────────────
+    RoverConnectedEvent:
+      name: roverConnected
+      title: Rover Connected Event
+      summary: Internal event broadcast when a rover registers
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RoverConnectedEventPayload'
+
+    RoverDisconnectedEvent:
+      name: roverDisconnected
+      title: Rover Disconnected Event
+      summary: Internal event broadcast when a rover disconnects
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/RoverDisconnectedEventPayload'
+
+    CrossInstanceCommand:
+      name: crossInstanceCommand
+      title: Cross-Instance Command
+      summary: Command routed to another backend instance via Redis
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/CrossInstanceCommandPayload'
+
+  schemas:
+    # ── Command Server Payloads ──────────────────────────────────────
+    RegisterPayload:
+      type: object
+      description: Registration request sent by a rover to the command server.
+      required:
+        - type
+        - name
+      properties:
+        type:
+          type: string
+          const: register
+          description: Message type identifier
+        name:
+          type: string
+          description: Human-readable name for the rover
+          examples:
+            - "Rover-01"
+            - "TestRover"
+
+    RegisteredPayload:
+      type: object
+      description: Registration confirmation sent by the server with the assigned rover UUID.
+      required:
+        - type
+        - roverId
+      properties:
+        type:
+          type: string
+          const: registered
+        roverId:
+          type: string
+          format: uuid
+          description: Unique identifier assigned to the rover
+          examples:
+            - "550e8400-e29b-41d4-a716-446655440000"
+
+    HeartbeatPayload:
+      type: object
+      description: Keep-alive message sent periodically by rovers to maintain their registration.
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          const: heartbeat
+
+    HeartbeatAckPayload:
+      type: object
+      description: Server acknowledgment of a heartbeat. Sent only if the rover is registered.
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          const: heartbeat_ack
+
+    CommandPayload:
+      type: object
+      description: Control command targeting a specific rover, sent by a dashboard client.
+      required:
+        - type
+        - roverId
+        - command
+      properties:
+        type:
+          type: string
+          const: command
+        roverId:
+          type: string
+          format: uuid
+          description: Target rover ID
+        command:
+          $ref: '#/components/schemas/RoverCommand'
+
+    RoverCommand:
+      description: |
+        Union of all supported rover commands. Discriminated by the `action` field.
+      oneOf:
+        - $ref: '#/components/schemas/MoveCommand'
+        - $ref: '#/components/schemas/StopCommand'
+        - $ref: '#/components/schemas/RotateCommand'
+        - $ref: '#/components/schemas/CalibrateCommand'
+      discriminator: action
+
+    MoveCommand:
+      type: object
+      description: Move the rover in a specified direction at an optional speed.
+      required:
+        - type
+        - action
+        - direction
+      properties:
+        type:
+          type: string
+          const: command
+        action:
+          type: string
+          const: move
+        direction:
+          type: string
+          enum:
+            - forward
+            - backward
+            - left
+            - right
+          description: Direction of movement
+        speed:
+          type: number
+          minimum: 0
+          maximum: 100
+          default: 50
+          description: Speed percentage (0-100), optional
+
+    StopCommand:
+      type: object
+      description: Immediately stop all rover movement.
+      required:
+        - type
+        - action
+      properties:
+        type:
+          type: string
+          const: command
+        action:
+          type: string
+          const: stop
+
+    RotateCommand:
+      type: object
+      description: Rotate the rover by a specified number of degrees.
+      required:
+        - type
+        - action
+        - degrees
+      properties:
+        type:
+          type: string
+          const: command
+        action:
+          type: string
+          const: rotate
+        degrees:
+          type: number
+          description: Rotation in degrees. Positive values = clockwise, negative = counter-clockwise.
+          examples:
+            - 90
+            - -45
+            - 180
+
+    CalibrateCommand:
+      type: object
+      description: Trigger sensor/motor calibration on the rover.
+      required:
+        - type
+        - action
+      properties:
+        type:
+          type: string
+          const: command
+        action:
+          type: string
+          const: calibrate
+
+    CommandAckPayload:
+      type: object
+      description: Server acknowledgment that a command was received and routed to the target rover.
+      required:
+        - type
+        - roverId
+      properties:
+        type:
+          type: string
+          const: command_ack
+        roverId:
+          type: string
+          format: uuid
+          description: The rover ID the command was sent to
+
+    # ── Media Server Payloads ────────────────────────────────────────
+    MediaRegisterPayload:
+      type: object
+      description: |
+        Media socket registration. The rover must already be registered via the
+        command server on this instance. Sends the rover ID obtained from command registration.
+      required:
+        - type
+        - roverId
+      properties:
+        type:
+          type: string
+          const: register
+        roverId:
+          type: string
+          format: uuid
+          description: Rover ID obtained from command server registration
+
+    MediaRegisteredPayload:
+      type: object
+      description: Confirmation that the media socket was linked to the rover.
+      required:
+        - type
+        - roverId
+      properties:
+        type:
+          type: string
+          const: registered
+        roverId:
+          type: string
+          format: uuid
+
+    StartStreamPayload:
+      type: object
+      description: Subscribe to a rover's media stream. The client will receive binary frames.
+      required:
+        - type
+        - roverId
+        - mediaType
+      properties:
+        type:
+          type: string
+          const: start_stream
+        roverId:
+          type: string
+          format: uuid
+          description: Rover to subscribe to
+        mediaType:
+          type: string
+          enum:
+            - video
+            - audio
+            - both
+          description: Type of media to receive
+
+    StreamStartedPayload:
+      type: object
+      description: Confirmation that the stream subscription is active.
+      required:
+        - type
+        - roverId
+        - mediaType
+      properties:
+        type:
+          type: string
+          const: stream_started
+        roverId:
+          type: string
+          format: uuid
+        mediaType:
+          type: string
+          enum:
+            - video
+            - audio
+            - both
+
+    StopStreamPayload:
+      type: object
+      description: Unsubscribe from a rover's media stream.
+      required:
+        - type
+        - roverId
+      properties:
+        type:
+          type: string
+          const: stop_stream
+        roverId:
+          type: string
+          format: uuid
+
+    StreamStoppedPayload:
+      type: object
+      description: Confirmation that the stream subscription has been cancelled.
+      required:
+        - type
+        - roverId
+      properties:
+        type:
+          type: string
+          const: stream_stopped
+        roverId:
+          type: string
+          format: uuid
+
+    MediaFramePayload:
+      type: string
+      format: binary
+      description: |
+        Binary frame with 1-byte header indicating media type, followed by raw frame data.
+        Minimum size: 2 bytes (1 header + at least 1 byte of data).
+
+        | Byte 0 (Header) | Meaning     |
+        |------------------|-------------|
+        | `0x01`           | Video frame |
+        | `0x02`           | Audio frame |
+
+        Format: `[media_type (1 byte)][frame_data (N bytes)]`
+
+    ErrorPayload:
+      type: object
+      description: Error response sent when the server cannot process a message.
+      required:
+        - type
+        - message
+      properties:
+        type:
+          type: string
+          const: error
+        message:
+          type: string
+          description: Human-readable error message
+          examples:
+            - "Invalid JSON"
+            - "Rover not found. Register via command server first."
+            - "Unknown message type"
+
+    # ── Internal Redis Pub/Sub Payloads ──────────────────────────────
+    RoverConnectedEventPayload:
+      type: object
+      description: Published to `rover:events` when a rover registers on any instance.
+      required:
+        - event
+        - roverId
+        - name
+      properties:
+        event:
+          type: string
+          const: "rover:connected"
+        roverId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Human-readable rover name
+
+    RoverDisconnectedEventPayload:
+      type: object
+      description: Published to `rover:events` when a rover's WebSocket connection closes.
+      required:
+        - event
+        - roverId
+      properties:
+        event:
+          type: string
+          const: "rover:disconnected"
+        roverId:
+          type: string
+          format: uuid
+
+    CrossInstanceCommandPayload:
+      type: object
+      description: |
+        Published to `rover:commands` when a command targets a rover on another instance.
+        Subscribing instances check if they own the target rover and deliver the command.
+      required:
+        - targetRoverId
+        - command
+      properties:
+        targetRoverId:
+          type: string
+          format: uuid
+          description: The rover to deliver the command to
+        command:
+          $ref: '#/components/schemas/RoverCommand'
+
+    # ── Future Feature Schemas ───────────────────────────────────────
+    RoverTelemetry:
+      type: object
+      description: "Telemetry data from rover (planned feature — not yet implemented)."
+      properties:
+        type:
+          type: string
+          const: telemetry
+        roverId:
+          type: string
+          format: uuid
+        timestamp:
+          type: number
+          description: Unix timestamp in milliseconds
+        data:
+          type: object
+          properties:
+            battery:
+              type: number
+              minimum: 0
+              maximum: 100
+              description: Battery percentage
+            speed:
+              type: number
+              description: Current speed
+            heading:
+              type: number
+              minimum: 0
+              maximum: 360
+              description: Compass heading in degrees
+            location:
+              type: object
+              properties:
+                lat:
+                  type: number
+                lng:
+                  type: number
+            sensors:
+              type: object
+              additionalProperties:
+                type: number
+
+    RoverStatus:
+      type: object
+      description: "Rover status update (planned feature — not yet implemented)."
+      properties:
+        type:
+          type: string
+          const: status
+        roverId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - online
+            - offline
+            - busy
+            - error
+        message:
+          type: string
+          description: Optional status message
