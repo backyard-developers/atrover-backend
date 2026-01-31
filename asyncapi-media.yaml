@@ -1,0 +1,427 @@
+asyncapi: 3.0.0
+info:
+  title: ATRover Media Server API
+  version: 1.0.0
+  description: |
+    WebSocket API for real-time video and audio streaming between rovers and dashboard clients.
+
+    ## HTTP Endpoints
+    - `GET /health` → `{ "status": "ok", "server": "media", "instanceId": "..." }`
+    - `GET /docs/media` → Interactive API documentation (this page)
+    - `GET /docs/media/spec` → Raw AsyncAPI YAML spec
+
+    ## Connection Flow
+    1. Rover must first register via the Command Server to obtain a UUID
+    2. Rover connects to Media Server WebSocket at `/ws`
+    3. Rover sends `register` message with its assigned rover ID
+    4. Dashboard clients connect and send `start_stream` to subscribe to a rover's media
+    5. Media frames are forwarded as binary WebSocket messages to all subscribers
+
+    ## Binary Frame Format
+    Media frames use a 1-byte header to indicate media type:
+
+    | Byte 0 (Header) | Meaning     |
+    |------------------|-------------|
+    | `0x01`           | Video frame |
+    | `0x02`           | Audio frame |
+
+    Format: `[media_type (1 byte)][frame_data (N bytes)]`
+    Minimum frame size: 2 bytes.
+
+    ## Environment Variables
+    | Variable | Default | Description |
+    |----------|---------|-------------|
+    | `MEDIA_PORT` | `8081` | Media server port |
+    | `INSTANCE_ID` | `instance-{PID}` | Unique instance identifier |
+
+  license:
+    name: MIT
+
+servers:
+  mediaServer:
+    host: localhost:8081
+    pathname: /ws
+    protocol: ws
+    description: |
+      Media streaming WebSocket server. Handles media socket registration,
+      stream subscription management, and binary frame forwarding.
+      Supports both text (JSON control) and binary (media frames) messages.
+
+channels:
+  mediaChannel:
+    address: /ws
+    description: |
+      Media server WebSocket channel for streaming.
+      Supports both text frames (JSON control messages) and binary frames (media data).
+      Binary frames use a 1-byte header to indicate media type.
+    servers:
+      - $ref: '#/servers/mediaServer'
+    messages:
+      mediaRegister:
+        $ref: '#/components/messages/MediaRegister'
+      mediaRegistered:
+        $ref: '#/components/messages/MediaRegistered'
+      startStream:
+        $ref: '#/components/messages/StartStream'
+      streamStarted:
+        $ref: '#/components/messages/StreamStarted'
+      stopStream:
+        $ref: '#/components/messages/StopStream'
+      streamStopped:
+        $ref: '#/components/messages/StreamStopped'
+      mediaFrame:
+        $ref: '#/components/messages/MediaFrame'
+      error:
+        $ref: '#/components/messages/Error'
+
+operations:
+  mediaRegister:
+    action: receive
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Register media socket
+    description: |
+      Rover registers its media socket after command registration. The rover
+      must already be registered on this instance via the command server.
+      If the rover ID is not found locally, an error is returned.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/mediaRegister'
+
+  subscribeToStream:
+    action: receive
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Subscribe to media stream
+    description: |
+      Dashboard client requests to receive video, audio, or both from a
+      specific rover. The client is added to an in-memory subscriber set
+      for that rover. Multiple clients can subscribe to the same rover.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/startStream'
+
+  unsubscribeFromStream:
+    action: receive
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Unsubscribe from media stream
+    description: |
+      Client stops receiving media from a rover. The subscriber is removed
+      from the set. When the last subscriber disconnects, the set is cleaned up.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/stopStream'
+
+  sendMediaFrame:
+    action: receive
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Rover sends media frame
+    description: |
+      Binary WebSocket message from the rover containing video or audio data.
+      The first byte indicates the media type (0x01 = video, 0x02 = audio),
+      followed by the raw frame data. Minimum frame size is 2 bytes.
+      The frame is forwarded to all subscribers of this rover.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/mediaFrame'
+
+  mediaRegistered:
+    action: send
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Confirm media registration
+    description: Server confirms the media socket was linked to the rover.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/mediaRegistered'
+
+  streamStarted:
+    action: send
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Stream subscription confirmed
+    description: Server confirms the client is now receiving the requested media type.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/streamStarted'
+
+  streamStopped:
+    action: send
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Stream unsubscription confirmed
+    description: Server confirms the client is no longer receiving media from the rover.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/streamStopped'
+
+  receiveMediaFrame:
+    action: send
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Client receives media frame
+    description: |
+      Forwarded binary media data from a subscribed rover. Same binary format
+      as the incoming frame: 1-byte type header followed by frame data.
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/mediaFrame'
+
+  sendMediaError:
+    action: send
+    channel:
+      $ref: '#/channels/mediaChannel'
+    summary: Media server error
+    description: |
+      Sent when the media server encounters an error (invalid JSON, unknown
+      message type, rover not found, etc.).
+    messages:
+      - $ref: '#/channels/mediaChannel/messages/error'
+
+components:
+  messages:
+    MediaRegister:
+      name: register
+      title: Media Register
+      summary: Register media socket for a rover
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MediaRegisterPayload'
+      examples:
+        - name: MediaRegisterExample
+          payload:
+            type: register
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+
+    MediaRegistered:
+      name: registered
+      title: Media Registered
+      summary: Confirmation of media socket registration
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/MediaRegisteredPayload'
+      examples:
+        - name: MediaRegisteredExample
+          payload:
+            type: registered
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+
+    StartStream:
+      name: start_stream
+      title: Start Stream
+      summary: Request to start receiving media from a rover
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StartStreamPayload'
+      examples:
+        - name: StartVideoStream
+          summary: Subscribe to video stream
+          payload:
+            type: start_stream
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+            mediaType: video
+        - name: StartBothStreams
+          summary: Subscribe to both video and audio
+          payload:
+            type: start_stream
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+            mediaType: both
+
+    StreamStarted:
+      name: stream_started
+      title: Stream Started
+      summary: Confirmation that stream subscription is active
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StreamStartedPayload'
+      examples:
+        - name: StreamStartedExample
+          payload:
+            type: stream_started
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+            mediaType: video
+
+    StopStream:
+      name: stop_stream
+      title: Stop Stream
+      summary: Request to stop receiving media from a rover
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StopStreamPayload'
+      examples:
+        - name: StopStreamExample
+          payload:
+            type: stop_stream
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+
+    StreamStopped:
+      name: stream_stopped
+      title: Stream Stopped
+      summary: Confirmation that stream subscription is cancelled
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/StreamStoppedPayload'
+      examples:
+        - name: StreamStoppedExample
+          payload:
+            type: stream_stopped
+            roverId: 550e8400-e29b-41d4-a716-446655440000
+
+    MediaFrame:
+      name: mediaFrame
+      title: Media Frame
+      summary: Binary video or audio frame
+      contentType: application/octet-stream
+      payload:
+        $ref: '#/components/schemas/MediaFramePayload'
+
+    Error:
+      name: error
+      title: Error
+      summary: Error response from server
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/ErrorPayload'
+      examples:
+        - name: InvalidJsonError
+          payload:
+            type: error
+            message: Invalid JSON
+        - name: RoverNotFoundError
+          payload:
+            type: error
+            message: "Rover not found. Register via command server first."
+        - name: UnknownTypeError
+          payload:
+            type: error
+            message: Unknown message type
+
+  schemas:
+    MediaRegisterPayload:
+      type: object
+      description: |
+        Media socket registration. The rover must already be registered via the
+        command server on this instance. Sends the rover ID obtained from command registration.
+      required:
+        - type
+        - roverId
+      properties:
+        type:
+          type: string
+          const: register
+        roverId:
+          type: string
+          format: uuid
+          description: Rover ID obtained from command server registration
+
+    MediaRegisteredPayload:
+      type: object
+      description: Confirmation that the media socket was linked to the rover.
+      required:
+        - type
+        - roverId
+      properties:
+        type:
+          type: string
+          const: registered
+        roverId:
+          type: string
+          format: uuid
+
+    StartStreamPayload:
+      type: object
+      description: Subscribe to a rover's media stream. The client will receive binary frames.
+      required:
+        - type
+        - roverId
+        - mediaType
+      properties:
+        type:
+          type: string
+          const: start_stream
+        roverId:
+          type: string
+          format: uuid
+          description: Rover to subscribe to
+        mediaType:
+          type: string
+          enum:
+            - video
+            - audio
+            - both
+          description: Type of media to receive
+
+    StreamStartedPayload:
+      type: object
+      description: Confirmation that the stream subscription is active.
+      required:
+        - type
+        - roverId
+        - mediaType
+      properties:
+        type:
+          type: string
+          const: stream_started
+        roverId:
+          type: string
+          format: uuid
+        mediaType:
+          type: string
+          enum:
+            - video
+            - audio
+            - both
+
+    StopStreamPayload:
+      type: object
+      description: Unsubscribe from a rover's media stream.
+      required:
+        - type
+        - roverId
+      properties:
+        type:
+          type: string
+          const: stop_stream
+        roverId:
+          type: string
+          format: uuid
+
+    StreamStoppedPayload:
+      type: object
+      description: Confirmation that the stream subscription has been cancelled.
+      required:
+        - type
+        - roverId
+      properties:
+        type:
+          type: string
+          const: stream_stopped
+        roverId:
+          type: string
+          format: uuid
+
+    MediaFramePayload:
+      type: string
+      format: binary
+      description: |
+        Binary frame with 1-byte header indicating media type, followed by raw frame data.
+        Minimum size: 2 bytes (1 header + at least 1 byte of data).
+
+        | Byte 0 (Header) | Meaning     |
+        |------------------|-------------|
+        | `0x01`           | Video frame |
+        | `0x02`           | Audio frame |
+
+        Format: `[media_type (1 byte)][frame_data (N bytes)]`
+
+    ErrorPayload:
+      type: object
+      description: Error response sent when the server cannot process a message.
+      required:
+        - type
+        - message
+      properties:
+        type:
+          type: string
+          const: error
+        message:
+          type: string
+          description: Human-readable error message
+          examples:
+            - "Invalid JSON"
+            - "Rover not found. Register via command server first."
+            - "Unknown message type"

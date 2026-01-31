@@ -66,10 +66,15 @@ npm run dev
 
 ### API Documentation
 
-- **`GET /docs`** — Interactive AsyncAPI UI (channels, operations, schemas, examples)
-- **`GET /docs/spec`** — Raw `asyncapi.yaml` spec file
+#### Command Server (port 8080)
+- **`GET /docs/command`** — Interactive AsyncAPI UI for command server
+- **`GET /docs/command/spec`** — Raw `asyncapi-command.yaml` spec file
 
-Open `http://localhost:8080/docs` after starting the server.
+#### Media Server (port 8081)
+- **`GET /docs/media`** — Interactive AsyncAPI UI for media server
+- **`GET /docs/media/spec`** — Raw `asyncapi-media.yaml` spec file
+
+Open `http://localhost:8080/docs/command` or `http://localhost:8081/docs/media` after starting the server.
 
 ### Environment Variables
 

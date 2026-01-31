@@ -10,7 +10,7 @@ const ASYNCAPI_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ATRover API Docs</title>
+  <title>ATRover Command Server API Docs</title>
   <link rel="stylesheet" href="https://unpkg.com/@asyncapi/react-component@2/styles/default.min.css">
   <style>
     html, body { margin: 0; padding: 0; font-family: sans-serif; }
@@ -21,7 +21,7 @@ const ASYNCAPI_HTML = `<!DOCTYPE html>
   <script src="https://unpkg.com/js-yaml@4/dist/js-yaml.min.js"></script>
   <script src="https://unpkg.com/@asyncapi/react-component@2/browser/standalone/index.js"></script>
   <script>
-    fetch('/docs/spec')
+    fetch('/docs/command/spec')
       .then(r => r.text())
       .then(yaml => {
         const schema = jsyaml.load(yaml);
@@ -39,21 +39,21 @@ export function createCommandServer(): http.Server {
       return;
     }
 
-    if (req.url === '/docs') {
+    if (req.url === '/docs/command') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       res.end(ASYNCAPI_HTML);
       return;
     }
 
-    if (req.url === '/docs/spec') {
+    if (req.url === '/docs/command/spec') {
       try {
-        const specPath = path.resolve('asyncapi.yaml');
+        const specPath = path.resolve('asyncapi-command.yaml');
         const yaml = fs.readFileSync(specPath, 'utf-8');
         res.writeHead(200, { 'Content-Type': 'text/yaml' });
         res.end(yaml);
       } catch {
         res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Failed to read asyncapi.yaml' }));
+        res.end(JSON.stringify({ error: 'Failed to read asyncapi-command.yaml' }));
       }
       return;
     }
