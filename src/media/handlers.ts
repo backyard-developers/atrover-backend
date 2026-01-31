@@ -1,5 +1,7 @@
 import type { WebSocket } from 'ws';
 import * as roverManager from '../rover/manager.js';
+import * as state from '../redis/state.js';
+import { config } from '../config/index.js';
 import { MediaType, type MediaControlMessage } from './types.js';
 
 const subscribers: Map<string, Set<WebSocket>> = new Map();
@@ -44,6 +46,10 @@ export function handleTextMessage(ws: WebSocket, data: string, roverId?: string)
       const rover = roverManager.getLocalRover(message.roverId);
       if (rover) {
         roverManager.setMediaSocket(message.roverId, ws);
+        const mediaUrl = `ws://${config.mediaHost}:${config.mediaPort}/ws`;
+        state.setMediaUrl(message.roverId, mediaUrl).catch((err) => {
+          console.error(`Failed to store mediaUrl for rover ${message.roverId}:`, err);
+        });
         ws.send(JSON.stringify({ type: 'registered', roverId: message.roverId }));
         console.log(`Media socket registered for rover: ${message.roverId}`);
         return message.roverId;

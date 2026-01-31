@@ -1,6 +1,7 @@
 export const config = {
   commandPort: parseInt(process.env.COMMAND_PORT || '8080', 10),
   mediaPort: parseInt(process.env.MEDIA_PORT || '8081', 10),
+  mediaHost: process.env.MEDIA_HOST || 'localhost',
 
   redis: {
     url: process.env.REDIS_URL || 'redis://localhost:6379',

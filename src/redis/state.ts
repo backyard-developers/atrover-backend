@@ -63,7 +63,13 @@ export async function getRover(roverId: string): Promise<RoverInfo | null> {
     connectedAt: parseInt(data.connectedAt, 10),
     lastHeartbeat: parseInt(data.lastHeartbeat, 10),
     instanceId: data.instanceId,
+    ...(data.mediaUrl ? { mediaUrl: data.mediaUrl } : {}),
   };
+}
+
+export async function setMediaUrl(roverId: string, url: string): Promise<void> {
+  const client = getRedisClient();
+  await client.hset(KEYS.ROVER(roverId), 'mediaUrl', url);
 }
 
 export async function getRoverInstance(roverId: string): Promise<string | null> {

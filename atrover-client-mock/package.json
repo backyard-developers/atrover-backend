@@ -1,0 +1,19 @@
+{
+  "name": "atrover-client-mock",
+  "version": "1.0.0",
+  "description": "Mock rover and viewer clients for testing atrover-backend media streaming",
+  "private": true,
+  "scripts": {
+    "rover": "tsx src/rover-mock.ts",
+    "viewer": "tsx src/viewer-mock.ts"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

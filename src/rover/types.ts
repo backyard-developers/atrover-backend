@@ -6,6 +6,7 @@ export interface RoverInfo {
   connectedAt: number;
   lastHeartbeat: number;
   instanceId: string;
+  mediaUrl?: string;
 }
 
 export interface RoverConnection {
