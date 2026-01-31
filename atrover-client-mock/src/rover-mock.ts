@@ -90,7 +90,6 @@ function connectCommand() {
 
   commandWs.on("message", (data) => {
     const msg = JSON.parse(data.toString());
-    log(`Command server message: ${JSON.stringify(msg)}`);
 
     if (msg.type === "registered" && msg.roverId) {
       roverId = msg.roverId;
@@ -105,6 +104,19 @@ function connectCommand() {
 
       // Now connect to media server
       connectMedia();
+    } else if (msg.type === "command" || msg.action) {
+      const action = msg.action || "unknown";
+      const direction = msg.direction || "";
+      const speed = msg.speed != null ? ` speed=${msg.speed}` : "";
+      console.log(`\n========================================`);
+      console.log(`  COMMAND RECEIVED`);
+      console.log(`  Action:    ${action}`);
+      if (direction) console.log(`  Direction: ${direction}`);
+      if (speed) console.log(`  Speed:    ${msg.speed}`);
+      console.log(`  Raw:       ${JSON.stringify(msg)}`);
+      console.log(`========================================\n`);
+    } else if (msg.type !== "heartbeat_ack") {
+      log(`Command server message: ${JSON.stringify(msg)}`);
     }
   });
 

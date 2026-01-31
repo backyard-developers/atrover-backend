@@ -94,7 +94,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
             + '<td>' + r.name + '</td>'
             + '<td><code>' + r.id + '</code></td>'
             + '<td>' + timeAgo(r.lastHeartbeat) + '</td>'
-            + '<td><a href="/dashboard/stream?roverId=' + encodeURIComponent(r.id) + '">Watch</a></td>'
+            + '<td><a href="/dashboard/stream?roverId=' + encodeURIComponent(r.id) + '">Control</a></td>'
             + '</tr>';
         }).join('');
       } catch (e) {
@@ -112,7 +112,7 @@ const STREAM_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ATRover Stream</title>
+  <title>ATRover Control</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f1117; color: #e1e4e8; padding: 24px; }
@@ -129,11 +129,33 @@ const STREAM_HTML = `<!DOCTYPE html>
     .connecting { color: #d29922; }
     .connected { color: #3fb950; }
     .error { color: #f85149; }
+    .main-layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+    .stream-panel { flex: 0 0 auto; }
+    .control-panel { flex: 0 0 auto; }
+    .control-panel h2 { font-size: 1rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+    .controls { display: grid; grid-template-columns: repeat(3, 64px); grid-template-rows: repeat(3, 64px); gap: 6px; }
+    .controls button {
+      width: 64px; height: 64px; border: 1px solid #30363d; border-radius: 8px;
+      background: #161b22; color: #e1e4e8; font-size: 0.75rem; font-weight: 600;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: background 0.15s, border-color 0.15s;
+      text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .controls button:hover { background: #1c2128; border-color: #58a6ff; }
+    .controls button:active, .controls button.active { background: #58a6ff; color: #0f1117; border-color: #58a6ff; }
+    .controls button:disabled { opacity: 0.3; cursor: not-allowed; }
+    .controls button.stop-btn { background: #b62324; border-color: #f85149; }
+    .controls button.stop-btn:hover { background: #da3633; }
+    .controls button.stop-btn:active, .controls button.stop-btn.active { background: #f85149; color: #0f1117; }
+    #cmdStatus { margin-top: 12px; font-size: 0.8rem; color: #8b949e; }
+    #cmdLog { margin-top: 8px; max-height: 160px; overflow-y: auto; font-size: 0.75rem; color: #8b949e; font-family: monospace; background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 8px; }
+    #cmdLog div { padding: 2px 0; border-bottom: 1px solid #161b22; }
+    .key-hint { font-size: 0.65rem; color: #484f58; margin-top: 2px; }
   </style>
 </head>
 <body>
   <a href="/dashboard">&larr; Back to Dashboard</a>
-  <h1 id="title">Stream</h1>
+  <h1 id="title">Control</h1>
   <p class="sub" id="roverId"></p>
   <div id="status" class="connecting">Connecting...</div>
   <div class="stats">
@@ -142,12 +164,32 @@ const STREAM_HTML = `<!DOCTYPE html>
     <div class="stat"><div class="label">FPS</div><div class="value" id="fps">0</div></div>
     <div class="stat"><div class="label">Throughput</div><div class="value" id="throughput">0 KB/s</div></div>
   </div>
-  <canvas id="canvas" width="320" height="240"></canvas>
+  <div class="main-layout">
+    <div class="stream-panel">
+      <canvas id="canvas" width="320" height="240"></canvas>
+    </div>
+    <div class="control-panel">
+      <h2>Rover Controls</h2>
+      <div class="controls">
+        <button disabled></button>
+        <button id="btnForward" data-action="move" data-direction="forward">Fwd<div class="key-hint">W</div></button>
+        <button disabled></button>
+        <button id="btnLeft" data-action="move" data-direction="left">Left<div class="key-hint">A</div></button>
+        <button id="btnStop" class="stop-btn" data-action="stop">Stop<div class="key-hint">S</div></button>
+        <button id="btnRight" data-action="move" data-direction="right">Right<div class="key-hint">D</div></button>
+        <button disabled></button>
+        <button id="btnBackward" data-action="move" data-direction="backward">Back<div class="key-hint">S</div></button>
+        <button disabled></button>
+      </div>
+      <div id="cmdStatus">Command WS: connecting...</div>
+      <div id="cmdLog"></div>
+    </div>
+  </div>
   <script>
     const params = new URLSearchParams(location.search);
     const roverId = params.get('roverId');
     if (!roverId) { document.getElementById('status').textContent = 'Missing roverId'; }
-    document.getElementById('title').textContent = 'Stream: ' + (roverId || '?');
+    document.getElementById('title').textContent = 'Control: ' + (roverId || '?');
     document.getElementById('roverId').textContent = roverId || '';
 
     const canvas = document.getElementById('canvas');
@@ -168,7 +210,88 @@ const STREAM_HTML = `<!DOCTYPE html>
       ctx.putImageData(imgData, 0, 0);
     }
 
-    async function start() {
+    /* ---- Command WebSocket (sends controls to rover) ---- */
+    let cmdWs;
+    const cmdLog = document.getElementById('cmdLog');
+
+    function logCmd(msg) {
+      const d = document.createElement('div');
+      d.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+      cmdLog.prepend(d);
+      while (cmdLog.children.length > 50) cmdLog.removeChild(cmdLog.lastChild);
+    }
+
+    function connectCommand() {
+      if (!roverId) return;
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      cmdWs = new WebSocket(proto + '//' + location.host + '/ws');
+
+      cmdWs.onopen = () => {
+        document.getElementById('cmdStatus').textContent = 'Command WS: connected';
+        document.getElementById('cmdStatus').style.color = '#3fb950';
+        logCmd('Connected to command server');
+      };
+
+      cmdWs.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          logCmd('Recv: ' + JSON.stringify(msg));
+        } catch {}
+      };
+
+      cmdWs.onerror = () => {
+        document.getElementById('cmdStatus').textContent = 'Command WS: error';
+        document.getElementById('cmdStatus').style.color = '#f85149';
+      };
+
+      cmdWs.onclose = () => {
+        document.getElementById('cmdStatus').textContent = 'Command WS: disconnected';
+        document.getElementById('cmdStatus').style.color = '#f85149';
+      };
+    }
+
+    function sendCommand(action, direction) {
+      if (!cmdWs || cmdWs.readyState !== WebSocket.OPEN) {
+        logCmd('Cannot send: command WS not connected');
+        return;
+      }
+      const cmd = { type: 'command', action: action };
+      if (direction) cmd.direction = direction;
+      const msg = { type: 'command', roverId: roverId, command: cmd };
+      cmdWs.send(JSON.stringify(msg));
+      const label = action === 'stop' ? 'STOP' : direction.toUpperCase();
+      logCmd('Sent: ' + label);
+    }
+
+    /* ---- Button handlers ---- */
+    document.querySelectorAll('.controls button[data-action]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        sendCommand(btn.dataset.action, btn.dataset.direction || null);
+      });
+    });
+
+    /* ---- Keyboard controls (WASD) ---- */
+    const keyMap = { w: 'btnForward', a: 'btnLeft', s: 'btnStop', arrowdown: 'btnBackward', d: 'btnRight',
+                     arrowup: 'btnForward', arrowleft: 'btnLeft', arrowright: 'btnRight' };
+    document.addEventListener('keydown', (e) => {
+      const id = keyMap[e.key.toLowerCase()];
+      if (!id) return;
+      e.preventDefault();
+      const btn = document.getElementById(id);
+      if (btn && !btn.classList.contains('active')) {
+        btn.classList.add('active');
+        sendCommand(btn.dataset.action, btn.dataset.direction || null);
+      }
+    });
+    document.addEventListener('keyup', (e) => {
+      const id = keyMap[e.key.toLowerCase()];
+      if (!id) return;
+      const btn = document.getElementById(id);
+      if (btn) btn.classList.remove('active');
+    });
+
+    /* ---- Media WebSocket (receives stream from rover) ---- */
+    async function startMedia() {
       if (!roverId) return;
       let mediaUrl;
       try {
@@ -192,7 +315,7 @@ const STREAM_HTML = `<!DOCTYPE html>
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
-        document.getElementById('status').textContent = 'Connected';
+        document.getElementById('status').textContent = 'Media connected';
         document.getElementById('status').className = 'connected';
         ws.send(JSON.stringify({ type: 'start_stream', roverId: roverId, mediaType: 'both' }));
       };
@@ -217,18 +340,19 @@ const STREAM_HTML = `<!DOCTYPE html>
       };
 
       ws.onerror = () => {
-        document.getElementById('status').textContent = 'Connection error';
+        document.getElementById('status').textContent = 'Media connection error';
         document.getElementById('status').className = 'error';
       };
 
       ws.onclose = () => {
-        document.getElementById('status').textContent = 'Disconnected';
+        document.getElementById('status').textContent = 'Media disconnected';
         document.getElementById('status').className = 'error';
       };
 
       window.addEventListener('beforeunload', () => {
         ws.send(JSON.stringify({ type: 'stop_stream', roverId: roverId }));
         ws.close();
+        if (cmdWs) cmdWs.close();
       });
     }
 
@@ -242,7 +366,8 @@ const STREAM_HTML = `<!DOCTYPE html>
       lastFpsTime = now;
     }, 1000);
 
-    start();
+    connectCommand();
+    startMedia();
   </script>
 </body>
 </html>`;
