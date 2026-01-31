@@ -64,6 +64,13 @@ redis-server --dir ./redis --daemonize yes
 npm run dev
 ```
 
+### API Documentation
+
+- **`GET /docs`** — Interactive AsyncAPI UI (channels, operations, schemas, examples)
+- **`GET /docs/spec`** — Raw `asyncapi.yaml` spec file
+
+Open `http://localhost:8080/docs` after starting the server.
+
 ### Environment Variables
 
 | Variable       | Default                 | Description            |
