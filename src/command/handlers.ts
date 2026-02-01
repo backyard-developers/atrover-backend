@@ -1,7 +1,7 @@
 import type { WebSocket } from 'ws';
 import * as roverManager from '../rover/manager.js';
 import { publish } from '../redis/pubsub.js';
-import type { IncomingMessage } from './types.js';
+import type { IncomingMessage, MotorMapping } from './types.js';
 
 export async function handleMessage(ws: WebSocket, data: string, roverId?: string): Promise<string | undefined> {
   let message: IncomingMessage;
@@ -30,6 +30,15 @@ export async function handleMessage(ws: WebSocket, data: string, roverId?: strin
         name: message.name,
       }));
 
+      // Push stored motor config to rover if available
+      const storedMapping = await roverManager.getMotorMapping(info.id);
+      if (storedMapping) {
+        ws.send(JSON.stringify({
+          type: 'motor_config',
+          mapping: storedMapping,
+        }));
+      }
+
       return info.id;
     }
 
@@ -56,6 +65,34 @@ export async function handleMessage(ws: WebSocket, data: string, roverId?: strin
         roverId: message.roverId,
       }));
 
+      return roverId;
+    }
+
+    case 'motor_config_update': {
+      const mapping = (message as any).mapping as MotorMapping;
+      const targetRoverId = (message as any).roverId as string;
+
+      // Validate
+      if (!mapping || typeof mapping.left !== 'number' || typeof mapping.right !== 'number'
+        || mapping.left < 1 || mapping.left > 4 || mapping.right < 1 || mapping.right > 4
+        || mapping.left === mapping.right) {
+        ws.send(JSON.stringify({ type: 'error', message: 'Invalid motor mapping: left and right must be 1-4 and different' }));
+        return roverId;
+      }
+
+      await roverManager.updateMotorMapping(targetRoverId, mapping);
+
+      ws.send(JSON.stringify({ type: 'motor_config_ack', mapping }));
+      return roverId;
+    }
+
+    case 'motor_config_request': {
+      const reqRoverId = (message as any).roverId as string;
+      const currentMapping = await roverManager.getMotorMapping(reqRoverId);
+      ws.send(JSON.stringify({
+        type: 'motor_config',
+        mapping: currentMapping || { left: 3, right: 4 },
+      }));
       return roverId;
     }
 

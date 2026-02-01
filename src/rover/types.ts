@@ -7,6 +7,7 @@ export interface RoverInfo {
   lastHeartbeat: number;
   instanceId: string;
   mediaUrl?: string;
+  motorMapping?: { left: number; right: number };
 }
 
 export interface RoverConnection {

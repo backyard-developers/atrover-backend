@@ -5,6 +5,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { config } from '../config/index.js';
 import { handleMessage, handleDisconnect } from './handlers.js';
 import * as state from '../redis/state.js';
+import * as roverManager from '../rover/manager.js';
+import type { MotorMapping } from './types.js';
 
 const ASYNCAPI_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -151,6 +153,16 @@ const STREAM_HTML = `<!DOCTYPE html>
     #cmdLog { margin-top: 8px; max-height: 160px; overflow-y: auto; font-size: 0.75rem; color: #8b949e; font-family: monospace; background: #0d1117; border: 1px solid #21262d; border-radius: 6px; padding: 8px; }
     #cmdLog div { padding: 2px 0; border-bottom: 1px solid #161b22; }
     .key-hint { font-size: 0.65rem; color: #484f58; margin-top: 2px; }
+    .motor-config { margin-top: 20px; }
+    .motor-config h2 { font-size: 1rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+    .motor-config select { background: #161b22; color: #e1e4e8; border: 1px solid #30363d; border-radius: 6px; padding: 8px 12px; font-size: 0.9rem; margin-right: 8px; }
+    .motor-config label { font-size: 0.85rem; color: #8b949e; margin-right: 4px; }
+    .motor-config .row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+    .motor-config button { background: #238636; border: 1px solid #2ea043; border-radius: 6px; color: #fff; padding: 8px 16px; cursor: pointer; font-size: 0.85rem; }
+    .motor-config button:hover { background: #2ea043; }
+    .motor-config button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .motor-config .current { font-size: 0.8rem; color: #8b949e; margin-top: 6px; }
+    .motor-config .error { color: #f85149; font-size: 0.8rem; }
   </style>
 </head>
 <body>
@@ -183,6 +195,28 @@ const STREAM_HTML = `<!DOCTYPE html>
       </div>
       <div id="cmdStatus">Command WS: connecting...</div>
       <div id="cmdLog"></div>
+    </div>
+    <div class="motor-config">
+      <h2>Motor Assignment</h2>
+      <div class="row">
+        <label for="leftMotor">Left:</label>
+        <select id="leftMotor">
+          <option value="1">Motor 1</option>
+          <option value="2">Motor 2</option>
+          <option value="3" selected>Motor 3</option>
+          <option value="4">Motor 4</option>
+        </select>
+        <label for="rightMotor">Right:</label>
+        <select id="rightMotor">
+          <option value="1">Motor 1</option>
+          <option value="2">Motor 2</option>
+          <option value="3">Motor 3</option>
+          <option value="4" selected>Motor 4</option>
+        </select>
+        <button id="applyMotorConfig">Apply</button>
+      </div>
+      <div id="motorConfigCurrent" class="current">Current: Left=Motor 3, Right=Motor 4</div>
+      <div id="motorConfigError" class="error"></div>
     </div>
   </div>
   <script>
@@ -366,7 +400,62 @@ const STREAM_HTML = `<!DOCTYPE html>
       lastFpsTime = now;
     }, 1000);
 
+    /* ---- Motor Config ---- */
+    const leftSelect = document.getElementById('leftMotor');
+    const rightSelect = document.getElementById('rightMotor');
+    const applyBtn = document.getElementById('applyMotorConfig');
+    const configCurrent = document.getElementById('motorConfigCurrent');
+    const configError = document.getElementById('motorConfigError');
+
+    function updateApplyState() {
+      const l = leftSelect.value;
+      const r = rightSelect.value;
+      applyBtn.disabled = (l === r);
+      configError.textContent = (l === r) ? 'Left and right must be different motors' : '';
+    }
+    leftSelect.addEventListener('change', updateApplyState);
+    rightSelect.addEventListener('change', updateApplyState);
+
+    async function loadMotorConfig() {
+      if (!roverId) return;
+      try {
+        const res = await fetch('/api/rovers/' + encodeURIComponent(roverId) + '/motor-config');
+        const cfg = await res.json();
+        leftSelect.value = cfg.left;
+        rightSelect.value = cfg.right;
+        configCurrent.textContent = 'Current: Left=Motor ' + cfg.left + ', Right=Motor ' + cfg.right;
+        updateApplyState();
+      } catch (e) {
+        configError.textContent = 'Failed to load motor config';
+      }
+    }
+
+    applyBtn.addEventListener('click', async () => {
+      if (!roverId) return;
+      const left = parseInt(leftSelect.value);
+      const right = parseInt(rightSelect.value);
+      if (left === right) return;
+      configError.textContent = '';
+      try {
+        const res = await fetch('/api/rovers/' + encodeURIComponent(roverId) + '/motor-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ left, right })
+        });
+        const data = await res.json();
+        if (data.ok) {
+          configCurrent.textContent = 'Current: Left=Motor ' + left + ', Right=Motor ' + right;
+          logCmd('Motor config updated: Left=' + left + ', Right=' + right);
+        } else {
+          configError.textContent = data.error || 'Update failed';
+        }
+      } catch (e) {
+        configError.textContent = 'Failed to update motor config';
+      }
+    });
+
     connectCommand();
+    loadMotorConfig();
     startMedia();
   </script>
 </body>
@@ -418,6 +507,48 @@ export function createCommandServer(): http.Server {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Failed to fetch rovers' }));
       }
+      return;
+    }
+
+    // GET /api/rovers/:id/motor-config
+    const motorConfigGetMatch = req.url?.match(/^\/api\/rovers\/([^/]+)\/motor-config$/);
+    if (motorConfigGetMatch && req.method === 'GET') {
+      const roverId = decodeURIComponent(motorConfigGetMatch[1]);
+      try {
+        const mapping = await state.getMotorMapping(roverId);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(mapping || { left: 3, right: 4 }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Failed to fetch motor config' }));
+      }
+      return;
+    }
+
+    // POST /api/rovers/:id/motor-config
+    const motorConfigPostMatch = req.url?.match(/^\/api\/rovers\/([^/]+)\/motor-config$/);
+    if (motorConfigPostMatch && req.method === 'POST') {
+      const roverId = decodeURIComponent(motorConfigPostMatch[1]);
+      let body = '';
+      req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+      req.on('end', async () => {
+        try {
+          const mapping: MotorMapping = JSON.parse(body);
+          if (!mapping || typeof mapping.left !== 'number' || typeof mapping.right !== 'number'
+            || mapping.left < 1 || mapping.left > 4 || mapping.right < 1 || mapping.right > 4
+            || mapping.left === mapping.right) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Invalid mapping: left and right must be 1-4 and different' }));
+            return;
+          }
+          await roverManager.updateMotorMapping(roverId, mapping);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true, mapping }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Failed to update motor config' }));
+        }
+      });
       return;
     }
 

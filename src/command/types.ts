@@ -41,4 +41,29 @@ export interface CommandMessage {
   command: RoverCommand;
 }
 
-export type IncomingMessage = RegisterMessage | HeartbeatMessage | CommandMessage;
+// --- Motor Mapping ---
+
+export interface MotorMapping {
+  left: number;  // 1-4
+  right: number; // 1-4
+}
+
+export const DEFAULT_MOTOR_MAPPING: MotorMapping = { left: 3, right: 4 };
+
+export interface MotorConfigUpdateMessage {
+  type: 'motor_config_update';
+  roverId: string;
+  mapping: MotorMapping;
+}
+
+export interface MotorConfigRequestMessage {
+  type: 'motor_config_request';
+  roverId: string;
+}
+
+export interface MotorConfigMessage {
+  type: 'motor_config';
+  mapping: MotorMapping;
+}
+
+export type IncomingMessage = RegisterMessage | HeartbeatMessage | CommandMessage | MotorConfigUpdateMessage | MotorConfigRequestMessage;

@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { config } from '../config/index.js';
 import * as state from '../redis/state.js';
 import type { RoverConnection, RoverInfo } from './types.js';
+import type { MotorMapping } from '../command/types.js';
 
 const localRovers: Map<string, RoverConnection> = new Map();
 
@@ -77,6 +78,15 @@ export function sendCommandToRover(roverId: string, command: unknown): boolean {
     return true;
   }
   return false;
+}
+
+export async function updateMotorMapping(roverId: string, mapping: MotorMapping): Promise<void> {
+  await state.saveMotorMapping(roverId, mapping);
+  sendCommandToRover(roverId, { type: 'motor_config', mapping });
+}
+
+export async function getMotorMapping(roverId: string): Promise<MotorMapping | null> {
+  return state.getMotorMapping(roverId);
 }
 
 export function sendMediaToRover(roverId: string, data: Buffer): boolean {

@@ -9,6 +9,7 @@ const KEYS = {
   ROVER_INSTANCE: (id: string) => `rover:${id}:instance`,
   INSTANCE_ROVERS: (instanceId: string) => `instance:${instanceId}:rovers`,
   ALL_ROVERS: 'rovers:all',
+  MOTOR_CONFIG: (id: string) => `rover:${id}:motor_config`,
 };
 
 export async function saveRover(rover: RoverInfo): Promise<void> {
@@ -85,6 +86,28 @@ export async function getAllRovers(): Promise<string[]> {
 export async function getInstanceRovers(instanceId: string = config.instanceId): Promise<string[]> {
   const client = getRedisClient();
   return client.smembers(KEYS.INSTANCE_ROVERS(instanceId));
+}
+
+export async function saveMotorMapping(roverId: string, mapping: { left: number; right: number }): Promise<void> {
+  const client = getRedisClient();
+  await client.hset(KEYS.MOTOR_CONFIG(roverId), {
+    left: mapping.left.toString(),
+    right: mapping.right.toString(),
+  });
+}
+
+export async function getMotorMapping(roverId: string): Promise<{ left: number; right: number } | null> {
+  const client = getRedisClient();
+  const data = await client.hgetall(KEYS.MOTOR_CONFIG(roverId));
+  if (!data || !data.left || !data.right) {
+    return null;
+  }
+  return { left: parseInt(data.left, 10), right: parseInt(data.right, 10) };
+}
+
+export async function removeMotorMapping(roverId: string): Promise<void> {
+  const client = getRedisClient();
+  await client.del(KEYS.MOTOR_CONFIG(roverId));
 }
 
 export async function updateHeartbeat(roverId: string): Promise<void> {
