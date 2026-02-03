@@ -126,7 +126,11 @@ const STREAM_HTML = `<!DOCTYPE html>
     .stat { background: #161b22; border-radius: 8px; padding: 12px 20px; }
     .stat .label { font-size: 0.75rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em; }
     .stat .value { font-size: 1.4rem; font-weight: 600; margin-top: 2px; }
-    canvas { background: #161b22; border-radius: 8px; display: block; image-rendering: pixelated; }
+    canvas { background: #161b22; border-radius: 8px; display: block; image-rendering: pixelated; transition: transform 0.3s ease; }
+    .canvas-wrapper { position: relative; display: inline-block; }
+    .rotate-btn { margin-top: 8px; background: #161b22; border: 1px solid #30363d; border-radius: 6px; color: #e1e4e8; padding: 8px 16px; cursor: pointer; font-size: 0.85rem; display: flex; align-items: center; gap: 6px; }
+    .rotate-btn:hover { background: #1c2128; border-color: #58a6ff; }
+    .rotate-btn svg { width: 16px; height: 16px; fill: currentColor; }
     #status { margin-bottom: 12px; font-size: 0.85rem; }
     .connecting { color: #d29922; }
     .connected { color: #3fb950; }
@@ -178,7 +182,13 @@ const STREAM_HTML = `<!DOCTYPE html>
   </div>
   <div class="main-layout">
     <div class="stream-panel">
-      <canvas id="canvas" width="320" height="240"></canvas>
+      <div class="canvas-wrapper">
+        <canvas id="canvas" width="320" height="240"></canvas>
+      </div>
+      <button id="rotateBtn" class="rotate-btn">
+        <svg viewBox="0 0 24 24"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+        Rotate 90°
+      </button>
     </div>
     <div class="control-panel">
       <h2>Rover Controls</h2>
@@ -230,6 +240,20 @@ const STREAM_HTML = `<!DOCTYPE html>
     const ctx = canvas.getContext('2d');
     let videoFrames = 0, audioFrames = 0, totalBytes = 0;
     let fpsCount = 0, lastFpsTime = Date.now();
+
+    /* ---- Camera rotation (frontend-only CSS transform) ---- */
+    let rotationDeg = 0;
+    document.getElementById('rotateBtn').addEventListener('click', () => {
+      rotationDeg = (rotationDeg + 90) % 360;
+      canvas.style.transform = 'rotate(' + rotationDeg + 'deg)';
+      localStorage.setItem('cameraRotation', rotationDeg);
+    });
+    // Restore saved rotation on load
+    const savedRotation = localStorage.getItem('cameraRotation');
+    if (savedRotation) {
+      rotationDeg = parseInt(savedRotation, 10) || 0;
+      canvas.style.transform = 'rotate(' + rotationDeg + 'deg)';
+    }
 
     function drawFrame(data) {
       const blob = new Blob([data], { type: 'image/jpeg' });
