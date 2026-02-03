@@ -232,16 +232,16 @@ const STREAM_HTML = `<!DOCTYPE html>
     let fpsCount = 0, lastFpsTime = Date.now();
 
     function drawFrame(data) {
-      const imgData = ctx.createImageData(canvas.width, canvas.height);
-      const pixels = canvas.width * canvas.height;
-      for (let i = 0; i < pixels; i++) {
-        const v = i < data.length ? data[i] : 0;
-        imgData.data[i * 4] = v;
-        imgData.data[i * 4 + 1] = v;
-        imgData.data[i * 4 + 2] = v;
-        imgData.data[i * 4 + 3] = 255;
-      }
-      ctx.putImageData(imgData, 0, 0);
+      const blob = new Blob([data], { type: 'image/jpeg' });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.onload = () => {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+      };
+      img.src = url;
     }
 
     /* ---- Command WebSocket (sends controls to rover) ---- */
