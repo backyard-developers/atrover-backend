@@ -403,7 +403,10 @@ const STREAM_HTML = `<!DOCTYPE html>
         return;
       }
 
-      const ws = new WebSocket(mediaUrl);
+      // Replace host with current browser hostname so it works from any client
+      const wsUrl = new URL(mediaUrl);
+      wsUrl.hostname = location.hostname;
+      const ws = new WebSocket(wsUrl.toString());
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
