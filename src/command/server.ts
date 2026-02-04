@@ -67,8 +67,8 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
   <script>
     function statusClass(ts) {
       const age = Date.now() - ts;
-      if (age < 15000) return 'online';
-      if (age < 60000) return 'stale';
+      if (age < 45000) return 'online';
+      if (age < 90000) return 'stale';
       return 'offline';
     }
     function timeAgo(ts) {
@@ -243,6 +243,38 @@ const STREAM_HTML = `<!DOCTYPE html>
     let videoFrames = 0, audioFrames = 0, totalBytes = 0;
     let fpsCount = 0, lastFpsTime = Date.now();
 
+    /* ---- Audio playback (16kHz mono 16-bit PCM) ---- */
+    let audioCtx = null;
+    let audioNextTime = 0;
+    const AUDIO_SAMPLE_RATE = 16000;
+
+    function ensureAudioCtx() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: AUDIO_SAMPLE_RATE });
+        audioNextTime = 0;
+      }
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+
+    function playPcmChunk(pcmBytes) {
+      ensureAudioCtx();
+      const sampleCount = Math.floor(pcmBytes.length / 2);
+      if (sampleCount === 0) return;
+      const buffer = audioCtx.createBuffer(1, sampleCount, AUDIO_SAMPLE_RATE);
+      const channel = buffer.getChannelData(0);
+      const view = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength);
+      for (let i = 0; i < sampleCount; i++) {
+        channel[i] = view.getInt16(i * 2, true) / 32768;
+      }
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(audioCtx.destination);
+      const now = audioCtx.currentTime;
+      if (audioNextTime < now) audioNextTime = now;
+      source.start(audioNextTime);
+      audioNextTime += buffer.duration;
+    }
+
     /* ---- Camera rotation (frontend-only CSS transform) ---- */
     let rotationDeg = 0;
     document.getElementById('rotateBtn').addEventListener('click', () => {
@@ -396,6 +428,7 @@ const STREAM_HTML = `<!DOCTYPE html>
         } else if (mediaType === 2) {
           audioFrames++;
           document.getElementById('aFrames').textContent = audioFrames;
+          playPcmChunk(frameData);
         }
       };
 
