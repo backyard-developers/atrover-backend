@@ -88,21 +88,28 @@ export async function getInstanceRovers(instanceId: string = config.instanceId):
   return client.smembers(KEYS.INSTANCE_ROVERS(instanceId));
 }
 
-export async function saveMotorMapping(roverId: string, mapping: { left: number; right: number }): Promise<void> {
+export async function saveMotorMapping(roverId: string, mapping: { left: number; right: number; leftReversed?: boolean; rightReversed?: boolean }): Promise<void> {
   const client = getRedisClient();
   await client.hset(KEYS.MOTOR_CONFIG(roverId), {
     left: mapping.left.toString(),
     right: mapping.right.toString(),
+    leftReversed: (mapping.leftReversed ?? false).toString(),
+    rightReversed: (mapping.rightReversed ?? false).toString(),
   });
 }
 
-export async function getMotorMapping(roverId: string): Promise<{ left: number; right: number } | null> {
+export async function getMotorMapping(roverId: string): Promise<{ left: number; right: number; leftReversed: boolean; rightReversed: boolean } | null> {
   const client = getRedisClient();
   const data = await client.hgetall(KEYS.MOTOR_CONFIG(roverId));
   if (!data || !data.left || !data.right) {
     return null;
   }
-  return { left: parseInt(data.left, 10), right: parseInt(data.right, 10) };
+  return {
+    left: parseInt(data.left, 10),
+    right: parseInt(data.right, 10),
+    leftReversed: data.leftReversed === 'true',
+    rightReversed: data.rightReversed === 'true',
+  };
 }
 
 export async function removeMotorMapping(roverId: string): Promise<void> {

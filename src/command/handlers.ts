@@ -91,7 +91,7 @@ export async function handleMessage(ws: WebSocket, data: string, roverId?: strin
       const currentMapping = await roverManager.getMotorMapping(reqRoverId);
       ws.send(JSON.stringify({
         type: 'motor_config',
-        mapping: currentMapping || { left: 3, right: 4 },
+        mapping: currentMapping || { left: 3, right: 4, leftReversed: false, rightReversed: false },
       }));
       return roverId;
     }

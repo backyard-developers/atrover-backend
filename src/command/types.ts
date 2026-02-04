@@ -46,9 +46,11 @@ export interface CommandMessage {
 export interface MotorMapping {
   left: number;  // 1-4
   right: number; // 1-4
+  leftReversed?: boolean;
+  rightReversed?: boolean;
 }
 
-export const DEFAULT_MOTOR_MAPPING: MotorMapping = { left: 3, right: 4 };
+export const DEFAULT_MOTOR_MAPPING: MotorMapping = { left: 3, right: 4, leftReversed: false, rightReversed: false };
 
 export interface MotorConfigUpdateMessage {
   type: 'motor_config_update';

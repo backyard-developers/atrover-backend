@@ -216,6 +216,7 @@ const STREAM_HTML = `<!DOCTYPE html>
           <option value="3" selected>Motor 3</option>
           <option value="4">Motor 4</option>
         </select>
+        <label style="margin-left:4px;cursor:pointer"><input type="checkbox" id="leftReversed"> Rev</label>
         <label for="rightMotor">Right:</label>
         <select id="rightMotor">
           <option value="1">Motor 1</option>
@@ -223,6 +224,7 @@ const STREAM_HTML = `<!DOCTYPE html>
           <option value="3">Motor 3</option>
           <option value="4" selected>Motor 4</option>
         </select>
+        <label style="margin-left:4px;cursor:pointer"><input type="checkbox" id="rightReversed"> Rev</label>
         <button id="applyMotorConfig">Apply</button>
       </div>
       <div id="motorConfigCurrent" class="current">Current: Left=Motor 3, Right=Motor 4</div>
@@ -427,9 +429,19 @@ const STREAM_HTML = `<!DOCTYPE html>
     /* ---- Motor Config ---- */
     const leftSelect = document.getElementById('leftMotor');
     const rightSelect = document.getElementById('rightMotor');
+    const leftReversedCb = document.getElementById('leftReversed');
+    const rightReversedCb = document.getElementById('rightReversed');
     const applyBtn = document.getElementById('applyMotorConfig');
     const configCurrent = document.getElementById('motorConfigCurrent');
     const configError = document.getElementById('motorConfigError');
+
+    function configLabel(cfg) {
+      let s = 'Current: Left=Motor ' + cfg.left;
+      if (cfg.leftReversed) s += ' (Rev)';
+      s += ', Right=Motor ' + cfg.right;
+      if (cfg.rightReversed) s += ' (Rev)';
+      return s;
+    }
 
     function updateApplyState() {
       const l = leftSelect.value;
@@ -447,7 +459,9 @@ const STREAM_HTML = `<!DOCTYPE html>
         const cfg = await res.json();
         leftSelect.value = cfg.left;
         rightSelect.value = cfg.right;
-        configCurrent.textContent = 'Current: Left=Motor ' + cfg.left + ', Right=Motor ' + cfg.right;
+        leftReversedCb.checked = cfg.leftReversed || false;
+        rightReversedCb.checked = cfg.rightReversed || false;
+        configCurrent.textContent = configLabel(cfg);
         updateApplyState();
       } catch (e) {
         configError.textContent = 'Failed to load motor config';
@@ -458,18 +472,20 @@ const STREAM_HTML = `<!DOCTYPE html>
       if (!roverId) return;
       const left = parseInt(leftSelect.value);
       const right = parseInt(rightSelect.value);
+      const leftReversed = leftReversedCb.checked;
+      const rightReversed = rightReversedCb.checked;
       if (left === right) return;
       configError.textContent = '';
       try {
         const res = await fetch('/api/rovers/' + encodeURIComponent(roverId) + '/motor-config', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ left, right })
+          body: JSON.stringify({ left, right, leftReversed, rightReversed })
         });
         const data = await res.json();
         if (data.ok) {
-          configCurrent.textContent = 'Current: Left=Motor ' + left + ', Right=Motor ' + right;
-          logCmd('Motor config updated: Left=' + left + ', Right=' + right);
+          configCurrent.textContent = configLabel({ left, right, leftReversed, rightReversed });
+          logCmd('Motor config updated: Left=' + left + (leftReversed ? ' (Rev)' : '') + ', Right=' + right + (rightReversed ? ' (Rev)' : ''));
         } else {
           configError.textContent = data.error || 'Update failed';
         }
@@ -541,7 +557,7 @@ export function createCommandServer(): http.Server {
       try {
         const mapping = await state.getMotorMapping(roverId);
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(mapping || { left: 3, right: 4 }));
+        res.end(JSON.stringify(mapping || { left: 3, right: 4, leftReversed: false, rightReversed: false }));
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Failed to fetch motor config' }));
@@ -557,7 +573,13 @@ export function createCommandServer(): http.Server {
       req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
       req.on('end', async () => {
         try {
-          const mapping: MotorMapping = JSON.parse(body);
+          const raw = JSON.parse(body);
+          const mapping: MotorMapping = {
+            left: raw.left,
+            right: raw.right,
+            leftReversed: raw.leftReversed === true,
+            rightReversed: raw.rightReversed === true,
+          };
           if (!mapping || typeof mapping.left !== 'number' || typeof mapping.right !== 'number'
             || mapping.left < 1 || mapping.left > 4 || mapping.right < 1 || mapping.right > 4
             || mapping.left === mapping.right) {
